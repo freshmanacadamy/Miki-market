@@ -1,0 +1,11 @@
+{
+  "name": "firebase-test",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node index.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^11.11.1",
+    "dotenv": "^16.3.1"
+  }
+}
