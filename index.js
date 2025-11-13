@@ -1,71 +1,59 @@
-const admin = require('firebase-admin');
-require('dotenv').config();
+import express from "express";
+import { Telegraf } from "telegraf";
+import { db, bucket } from "./firebase.js";
+import fetch from "node-fetch";
 
-// Firebase configuration
-const serviceAccount = {
-  type: "service_account",
-  project_id: process.env.FIREBASE_PROJECT_ID,
-  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-  private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-  client_email: process.env.FIREBASE_CLIENT_EMAIL,
-  client_id: process.env.FIREBASE_CLIENT_ID,
-  auth_uri: "https://accounts.google.com/o/oauth2/auth",
-  token_uri: "https://oauth2.googleapis.com/token",
-  auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-  client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL
-};
+const app = express();
+app.use(express.json());
 
-async function testFirebase() {
-  try {
-    console.log('🚀 Starting Firebase test...');
-    
-    // Initialize Firebase
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-      databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com/`,
-      storageBucket: `${process.env.FIREBASE_PROJECT_ID}.appspot.com`
-    });
+// 🔹 Use your bot token from environment variables
+const bot = new Telegraf(process.env.BOT_TOKEN);
 
-    console.log('✅ Firebase App initialized');
+// 🔸 Handle text messages
+bot.on("text", async (ctx) => {
+  const text = ctx.message.text;
+  await db.collection("messages").add({
+    user: ctx.from.username || ctx.from.first_name,
+    text,
+    date: new Date().toISOString()
+  });
+  await ctx.reply("✅ Text saved to Firebase!");
+});
 
-    // Test Firestore
-    const db = admin.firestore();
-    const testDoc = db.collection('test').doc('connection');
-    
-    await testDoc.set({
-      message: 'Firebase connection test',
-      timestamp: new Date(),
-      status: 'success'
-    });
-    console.log('✅ Firestore write test passed');
+// 🔸 Handle photo uploads
+bot.on("photo", async (ctx) => {
+  const photo = ctx.message.photo.pop();
+  const fileId = photo.file_id;
+  const file = await ctx.telegram.getFile(fileId);
+  const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
 
-    const doc = await testDoc.get();
-    if (doc.exists) {
-      console.log('✅ Firestore read test passed');
-      console.log('📄 Document data:', doc.data());
-    }
+  // Download photo and upload to Firebase Storage
+  const response = await fetch(fileUrl);
+  const buffer = await response.arrayBuffer();
+  const fileName = `uploads/${Date.now()}.jpg`;
+  const fileRef = bucket.file(fileName);
+  await fileRef.save(Buffer.from(buffer), { contentType: "image/jpeg" });
+  const [url] = await fileRef.getSignedUrl({ action: "read", expires: "01-01-2030" });
 
-    // Test Storage
-    const bucket = admin.storage().bucket();
-    const file = bucket.file('test.txt');
-    
-    await file.save('Firebase storage test', {
-      metadata: {
-        contentType: 'text/plain',
-      },
-    });
-    console.log('✅ Storage write test passed');
+  // Save URL to Firestore
+  await db.collection("uploads").add({
+    user: ctx.from.username || ctx.from.first_name,
+    imageUrl: url,
+    date: new Date().toISOString()
+  });
 
-    // Clean up test files
-    await testDoc.delete();
-    console.log('🧹 Test document cleaned up');
+  await ctx.reply("📸 Image uploaded to Firebase!");
+});
 
-    console.log('🎉 ALL FIREBASE TESTS PASSED!');
-    
-  } catch (error) {
-    console.error('❌ Firebase test failed:', error);
-  }
-}
+// Required for Vercel
+app.use(bot.webhookCallback(`/${process.env.BOT_TOKEN}`));
 
-// Run the test
-testFirebase();
+// 🔸 Set webhook automatically
+app.get("/", async (req, res) => {
+  const webhookUrl = `${req.protocol}://${req.get("host")}/${process.env.BOT_TOKEN}`;
+  await bot.telegram.setWebhook(webhookUrl);
+  res.send("🤖 Bot webhook set and running!");
+});
+
+app.listen(3000, () => console.log("Bot running on port 3000"));
+export default app;
